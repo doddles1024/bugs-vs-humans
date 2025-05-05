@@ -7,6 +7,7 @@
 #ursina helps you create 3d games middle one helps you get get random amounts and the last one helps create keys to use to move and line 7 helps you actually imput those keys that you would use to move.
 from ursina import *
 from random import uniform
+import os  # For restart game functionality
 from ursina.prefabs.first_person_controller import FirstPersonController
 
 # Gun cooldown settings
@@ -26,8 +27,25 @@ is_reloading = False  # Track if currently reloading
 reload_progress_bar = None  # Will hold the reload progress UI element
 cooldown_indicator = None  # Will hold the cooldown indicator UI element
 
-# Ladder climbing
-on_ladder = False
+# Health system
+max_health = 100
+current_health = max_health
+health_bar = None
+health_text = None
+last_damage_time = 0
+damage_cooldown = 0.5  # Time in seconds between taking damage from the same enemy
+is_invulnerable = False  # Flag to prevent damage during invulnerability period
+invulnerability_time = 1.0  # Seconds of invulnerability after taking damage
+
+# Sprint system
+normal_speed = 5
+sprint_speed = 10
+sprint_active = False
+stamina = 100  # Maximum stamina
+current_stamina = stamina
+stamina_regen_rate = 10  # Stamina regained per second when not sprinting
+stamina_drain_rate = 20  # Stamina drained per second when sprinting
+stamina_bar = None  # Will hold the stamina bar UI element
 
 def reload_gun():
     global current_ammo, needs_reload, is_reloading, reload_start_time
@@ -64,6 +82,7 @@ def try_shoot():
         Audio("assets/laser_sound.wav")
         Animation("assets/spark", parent=camera.ui, fps=5, scale=.1, position=(.19, -.03), loop=False)
 
+
         # Raycast for more accurate hit detection
         hit_info = raycast(camera.world_position, camera.forward, distance=100)
         
@@ -86,64 +105,150 @@ def try_shoot():
         return True
     return False
 
-def check_ladder_collision():
-    global on_ladder
+def toggle_sprint(active):
+    global sprint_active
+    sprint_active = active
     
-    # Raycast forward to check if player is looking at ladder
-    hit_info = raycast(camera.world_position, camera.forward, distance=2)
+    # Apply the appropriate speed
+    if sprint_active and current_stamina > 0:
+        player.speed = sprint_speed
+    else:
+        player.speed = normal_speed
+        
+def create_health_bar():
+    global health_bar, health_text
     
-    # Check if player is close to the ladder
-    if hit_info.hit and hasattr(hit_info.entity, 'is_ladder') and hit_info.entity.is_ladder:
-        # Set a text prompt to show player they can use the ladder
-        if not on_ladder:
-            Text("Press E to climb", position=(0, -0.2), origin=(0, 0), scale=1.5, color=color.yellow, parent=camera.ui)
-        return True
-    return False
+    # Health bar background (black border)
+    health_bar_background = Entity(
+        parent=camera.ui,
+        model="quad",
+        scale=(0.25, 0.04),
+        position=(0.7, -0.45),
+        color=color.black
+    )
+    
+    # Health bar (green)
+    health_bar = Entity(
+        parent=camera.ui,
+        model="quad",
+        scale=(0.24, 0.03),
+        position=(0.7, -0.45),
+        color=color.green
+    )
+    
+    # Health text
+    health_text = Text(
+        parent=camera.ui,
+        text=f"{current_health}",
+        position=(0.7, -0.45),
+        origin=(0, 0),
+        color=color.black,
+        scale=1.5
+    )
+
+def take_damage(amount):
+    global current_health, is_invulnerable, last_damage_time
+    
+    # Don't take damage during invulnerability period
+    if is_invulnerable:
+        return
+    
+    # Apply damage
+    current_health = max(0, current_health - amount)
+    
+    # Update health bar
+    if health_bar:
+        health_bar.scale_x = 0.24 * (current_health / max_health)
+    
+    # Update health text
+    if health_text:
+        health_text.text = f"{current_health}"
+    
+    # Play damage sound
+    Audio("assets/laser_sound.wav")  # Replace with damage sound when available
+    
+    # Make player temporarily invulnerable
+    is_invulnerable = True
+    last_damage_time = time.time()
+    
+    # Game over check
+    if current_health <= 0:
+        game_over()
+
+def game_over():
+    # Create game over text
+    Text(
+        text="GAME OVER",
+        origin=(0, 0),
+        scale=5,
+        color=color.red,
+        position=(0, 0.2)
+    )
+    
+    # Create restart button
+    restart_button = Button(
+        text="Restart Game",
+        scale=(0.4, 0.1),
+        position=(0, -0.1),
+        color=color.red.tint(-0.2),
+        highlight_color=color.red
+    )
+    
+    # Define restart function
+    def restart():
+        application.quit()
+        os.startfile(__file__)  # This will restart the game on Windows
+        
+    restart_button.on_click = restart
 
 def input(key):
-    global on_ladder
-    
     if key == "left mouse down":
         try_shoot()
     elif key == "r" and needs_reload and not is_reloading:
         reload_gun()
-    elif key == "e":
-        # Check if player is looking at the ladder
-        hit_info = raycast(camera.world_position, camera.forward, distance=2)
-        if hit_info.hit and hasattr(hit_info.entity, 'is_ladder') and hit_info.entity.is_ladder:
-            on_ladder = not on_ladder
-            
-            # Change player gravity when on ladder
-            if on_ladder:
-                player.gravity = 0
-                player.speed = 3  # Lower speed while climbing
-                Text("Climbing mode ON - Use WASD to climb", position=(0, 0.3), origin=(0, 0), scale=1.5, color=color.lime, parent=camera.ui)
-            else:
-                player.gravity = 1
-                player.speed = 5  # Reset to normal speed
-                Text("Climbing mode OFF", position=(0, 0.3), origin=(0, 0), scale=1.5, color=color.red, parent=camera.ui)
+    elif key == "left shift":
+        toggle_sprint(True)
+    elif key == "left shift up":
+        toggle_sprint(False)
 
 # Update function for game logic
 def update():
-    global ammo_text, is_reloading, current_ammo, needs_reload, reload_progress_bar, cooldown_indicator, on_ladder
+    # Update function for game logic
+    global ammo_text, is_reloading, current_ammo, needs_reload, reload_progress_bar, cooldown_indicator
+    global sprint_active, current_stamina, stamina_bar
+    global is_invulnerable, last_damage_time  # Added is_invulnerable to global declaration
     
     current_time = time.time()
+    # Handle invulnerability timer
     
-    # Handle ladder climbing
-    if on_ladder:
-        # Allow vertical movement while on ladder
-        if held_keys['w']:
-            player.y += time.dt * 3  # Climb up
-        if held_keys['s']:
-            player.y -= time.dt * 3  # Climb down
-            
-        # Check if player is still near ladder
-        hit_info = raycast(camera.world_position, camera.forward, distance=2)
-        if not (hit_info.hit and hasattr(hit_info.entity, 'is_ladder') and hit_info.entity.is_ladder):
-            # Player moved away from ladder
-            on_ladder = False
-            player.gravity = 1
-            player.speed = 5  # Reset to normal speed
+    if is_invulnerable and current_time - last_damage_time >= invulnerability_time:
+        is_invulnerable = False
+    
+    # Check for enemy collisions and apply damage
+    for enemy in [*wasps, *spiders]:
+        if enemy and enemy.enabled:
+            distance_to_player = (player.position - enemy.position).length()
+            if distance_to_player < 0.8:  # Close enough to damage player
+                take_damage(5)  # Take 5 damage points per hit
+    # Handle sprint and stamina
+    if sprint_active and current_stamina > 0:
+        # Drain stamina while sprinting
+        current_stamina = max(0, current_stamina - stamina_drain_rate * time.dt)
+        player.speed = sprint_speed
+        
+        # If stamina is depleted, disable sprint
+        if current_stamina <= 0:
+            player.speed = normal_speed
+    else:
+        # Regenerate stamina when not sprinting
+        current_stamina = min(stamina, current_stamina + stamina_regen_rate * time.dt)
+        player.speed = normal_speed
+    
+    # Update stamina bar
+    if stamina_bar is None:
+        stamina_bar = Entity(parent=camera.ui, model='quad', color=color.blue, 
+                           scale=(.2, .02), position=(0.7, -0.3))
+    stamina_bar.scale_x = 0.2 * (current_stamina / stamina)
     
     # Handle reload timer
     if is_reloading:
@@ -189,8 +294,10 @@ def update():
         ammo_text = Text(text=f"Ammo: {current_ammo}/{max_ammo}", position=(0.7, -0.45), 
                         parent=camera.ui, scale=1.5)
     
-    # Check for ladder interaction
-    check_ladder_collision()
+    # Create sprint text if it doesn't exist
+    if not hasattr(camera.ui, 'sprint_text'):
+        camera.ui.sprint_text = Text(text="Sprint: Left Shift", position=(0.7, -0.25), 
+                            parent=camera.ui, scale=1.5)
 
 class Wasp(Button):
     def __init__(self, x, y, z):
@@ -204,10 +311,63 @@ class Wasp(Button):
             )
         self.is_enemy = True
         self.original_x = x
+        self.original_position = Vec3(x, y, z)  # Store original position for patrolling
         self.move_distance = 0.5
-        self.speed = 0.2
+        self.patrol_speed = 0.2
+        self.follow_speed = 4  # Faster when following player
+        self.detection_range = 30  # How far the wasp can detect the player
+        self.following_player = False
         
     def update(self):
+        # Calculate distance to player
+        distance_to_player = (player.position - self.position).length()
+        
+        # Check if player is within detection range
+        if distance_to_player <= self.detection_range:
+            self.following_player = True
+        else:
+            self.following_player = False
+        
+        if self.following_player:
+            # Follow player behavior
+            self.follow_player()
+        else:
+            # Normal patrol behavior
+            self.patrol()
+    
+    def follow_player(self):
+        # Get direction to player
+        direction = (player.position - self.position).normalized()
+        
+        # Calculate next position
+        next_position = self.position + direction * self.follow_speed * time.dt
+        
+        # Check for wall collision before moving
+        hit_info = raycast(
+            self.position, 
+            direction, 
+            distance=0.3, 
+            ignore=(self,)
+        )
+        
+        if not hit_info.hit:
+            # Safe to move toward player
+            self.position = next_position
+            
+            # Look at player (only y-rotation/yaw)
+            self.look_at_2d(player.position)
+        
+        # Check if close enough to attack - damage is handled in main update function
+        # This is just for visual/sound effects when attacking
+        distance_to_player = (player.position - self.position).length()
+        if distance_to_player < 0.8:
+            if not hasattr(self, 'last_attack_time') or time.time() - self.last_attack_time > 1.0:
+                self.last_attack_time = time.time()
+                # Play attack animation or sound here if you have one
+                self.animate_scale(self.scale * 1.2, duration=0.1, curve=curve.out_bounce)
+                self.animate_scale(self.scale, duration=0.1, delay=0.1)
+    
+    def patrol(self):
         # Check for wall collision before moving
         hit_info = raycast(
             self.position + Vec3(self.move_distance, 0, 0), 
@@ -229,12 +389,18 @@ class Wasp(Button):
             # Create a new animation that respects walls
             self.animate_x(
                 self.original_x + self.move_distance, 
-                duration=self.speed, 
+                duration=self.patrol_speed, 
                 curve=curve.linear
             )
             
             # Update original position for next cycle
             self.original_x = self.position.x
+    
+    def look_at_2d(self, target_pos):
+        """Make entity look at target but only rotate on y-axis"""
+        direction = target_pos - self.position
+        # Only care about horizontal direction (y is up in Ursina)
+        self.rotation_y = math.degrees(math.atan2(direction.x, direction.z))
 
 class Spider(Button):
     def __init__(self, x, y, z):
@@ -248,10 +414,54 @@ class Spider(Button):
             )
         self.is_enemy = True
         self.original_x = x
+        self.original_position = Vec3(x, y, z)  # Store original position for patrolling
         self.move_distance = 0.5
-        self.speed = 0.2
+        self.patrol_speed = 0.2
+        self.follow_speed = 1
+        self.detection_range = 60  # Shorter detection range than wasps
+        self.following_player = False
         
     def update(self):
+        # Calculate distance to player
+        distance_to_player = (player.position - self.position).length()
+        
+        # Check if player is within detection range
+        if distance_to_player <= self.detection_range:
+            self.following_player = True
+        else:
+            self.following_player = False
+        
+        if self.following_player:
+            # Follow player behavior
+            self.follow_player()
+        else:
+            # Normal patrol behavior
+            self.patrol()
+    
+    def follow_player(self):
+        # Get direction to player - spiders stay on the ground
+        player_ground_pos = Vec3(player.position.x, self.y, player.position.z)
+        direction = (player_ground_pos - self.position).normalized()
+        
+        # Calculate next position
+        next_position = self.position + direction * self.follow_speed * time.dt
+        
+        # Check for wall collision before moving
+        hit_info = raycast(
+            self.position, 
+            direction, 
+            distance=0.3, 
+            ignore=(self,)
+        )
+        
+        if not hit_info.hit:
+            # Safe to move toward player
+            self.position = next_position
+            
+            # Look at player (only y-rotation/yaw)
+            self.look_at_2d(player_ground_pos)
+    
+    def patrol(self):
         # Check for wall collision before moving
         hit_info = raycast(
             self.position + Vec3(self.move_distance, 0, 0), 
@@ -273,39 +483,21 @@ class Spider(Button):
             # Create a new animation that respects walls
             self.animate_x(
                 self.original_x + self.move_distance, 
-                duration=self.speed, 
+                duration=self.patrol_speed, 
                 curve=curve.linear
             )
             
             # Update original position for next cycle
             self.original_x = self.position.x
-
-class Ladder(Entity):
-    def __init__(self, position, height):
-        super().__init__(
-            parent=scene,
-            model="cube",
-            texture="brick",
-            color=color.brown,
-            position=position,
-            scale=(0.5, height, 0.5),
-            collider="box",
-        )
-        self.is_ladder = True
-        
-        # Create ladder rungs
-        rung_count = int(height * 2)  # One rung every 0.5 units
-        for i in range(rung_count):
-            rung = Entity(
-                parent=self,
-                model="cube",
-                color=color.dark_gray,
-                position=(0, -height/2 + (i+0.5) * (height/rung_count), 0.3),
-                scale=(0.7, 0.1, 0.1)
-            )
+    
+    def look_at_2d(self, target_pos):
+        """Make entity look at target but only rotate on y-axis"""
+        direction = target_pos - self.position
+        # Only care about horizontal direction (y is up in Ursina)
+        self.rotation_y = math.degrees(math.atan2(direction.x, direction.z))
 
 app = Ursina()
-
+create_health_bar()
 # Add walls
 walls = []
 
@@ -315,6 +507,7 @@ walls = []
 #line 61-76 is the amount of enimies that can spawn and their animations
 Sky()
 player = FirstPersonController(y=2, origin_y=-.5)
+player.speed = normal_speed  # Set initial speed to normal
 ground = Entity(model='plane', scale=(100, 1, 100), color=color.lime, texture="white_cube",
     texture_scale=(100, 100), collider='box')
 
@@ -358,23 +551,11 @@ wall_4 = Entity(model="cube", collider="box", position=(-15, 0, 10), scale=(1,5,
     texture="brick", texture_scale=(5,5), color=color.rgb(255, 128, 0))
 walls.append(wall_4)
 
-# Add a taller wall to climb
-tall_wall = Entity(model="cube", collider="box", position=(5, 5, 5), scale=(5, 15, 1), 
-                 texture="brick", texture_scale=(3,9), color=color.orange)
-walls.append(tall_wall)
-
-# Add a platform on top of the tall wall
-platform_top = Entity(model="cube", collider="box", position=(5, 12.5, 7), 
-                     scale=(5, 0.5, 5), color=color.gray, texture="white_cube")
-
-# Add a ladder to climb the tall wall
-ladder = Ladder(position=(3, 5, 5.6), height=12)
-
-# Add instruction text for the ladder
-Text("Find the ladder and press E to climb", position=(0, 0.4), origin=(0, 0), scale=1.5, color=color.yellow, parent=camera.ui)
-
 gun = Entity(model="assets/gun.obj", parent=camera.ui, scale=.08, color=color.gold, position=(.3, -.2),
     rotation=(-5, -10, -10))
+
+# Add sprint instructions on screen
+Text("Hold Left Shift to Sprint", position=(0, 0.4), origin=(0, 0), scale=1.5, color=color.yellow, parent=camera.ui)
 
 num = 6
 wasps = [None] * num
@@ -426,4 +607,4 @@ for i in range(num):
     
     spiders[i] = Spider(sx, sy, sz)
 
-app.run()           
+app.run()
